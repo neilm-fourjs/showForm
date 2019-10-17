@@ -7,19 +7,15 @@ IMPORT os
 CONSTANT abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 
 DEFINE m_formname STRING
-DEFINE m_ask, m_auto, m_toolbar SMALLINT
-
+DEFINE m_auto, m_toolbar SMALLINT
 DEFINE m_autofill, m_dbgtxt STRING
-DEFINE m_mdi, ad_name, st_name STRING
+DEFINE m_mdi STRING
 
 MAIN
 
 	LET m_autofill = FALSE
 	LET m_toolbar = FALSE
 	LET m_auto = TRUE
-
-	LET ad_name = "default"
-	LET st_name = "default"
 
 	LET m_formname = ARG_VAL(1)
 
@@ -42,6 +38,8 @@ MAIN
 		LET m_auto = FALSE
 	END IF
 
+	CALL loadResources()
+
 	CASE m_mdi
 		WHEN "M"
 			CALL ui.Interface.setText("MDI Container")
@@ -49,7 +47,7 @@ MAIN
 			CALL ui.Interface.setName("MDIcontain")
 			CALL load_tb(TRUE, "container")
 			CALL add_tm()
-			RUN "testform " || m_formname || " 2" WITHOUT WAITING
+			RUN "fglrun showForm.42r " || m_formname || " C" WITHOUT WAITING
 			CALL doMenu()
 			EXIT PROGRAM
 		WHEN "C"
@@ -57,19 +55,21 @@ MAIN
 			CALL ui.Interface.setContainer("MDIcontain")
 	END CASE
 
-	CALL ui.Form.setDefaultInitializer("init_form")
-
 	IF m_formname = "ASK" THEN
 		CALL sel_form()
-	ELSE
-		IF NOT os.path.exists(m_formname || ".42f") THEN
-			CALL fgl_winMessage("Error", SFMT("Form '%1' not found", m_formname), "exclamation")
-			EXIT PROGRAM
-		END IF
-		DISPLAY m_dbgtxt, ":Opening form: ", m_formname
-		OPEN FORM astab FROM m_formname
-		DISPLAY FORM astab
+		EXIT PROGRAM
 	END IF
+
+	CALL ui.Form.setDefaultInitializer("init_form")
+
+	IF NOT os.path.exists(m_formname || ".42f") THEN
+		CALL fgl_winMessage(
+				"Error", SFMT("Form '%1' not found in '%2'", m_formname, os.path.pwd()), "exclamation")
+		EXIT PROGRAM
+	END IF
+	DISPLAY m_dbgtxt, ":Opening form: ", m_formname
+	OPEN FORM astab FROM m_formname
+	DISPLAY FORM astab
 
 	IF m_autofill THEN
 		CALL auto_fillform()
@@ -79,20 +79,34 @@ MAIN
 
 END MAIN
 --------------------------------------------------------------------------------
+FUNCTION loadStyles(l_name STRING) RETURNS BOOLEAN
+	TRY
+		CALL ui.interface.loadStyles(l_name)
+		RETURN TRUE
+	CATCH
+		DISPLAY m_dbgtxt, ":Styles '" || l_name || "' NOT loaded! "
+	END TRY
+	RETURN FALSE
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION loadActions(l_name STRING) RETURNS BOOLEAN
+	TRY
+		CALL ui.interface.loadActionDefaults(l_name)
+		RETURN TRUE
+	CATCH
+		DISPLAY m_dbgtxt, ":Actions '" || l_name || "' NOT loaded! "
+	END TRY
+	RETURN FALSE
+END FUNCTION
+--------------------------------------------------------------------------------
 FUNCTION loadResources()
-	IF st_name IS NOT NULL THEN
-		TRY
-			CALL ui.interface.loadStyles(st_name)
-		CATCH
-			DISPLAY m_dbgtxt, ":Styles '" || st_name || "' NOT loaded! "
-		END TRY
+	IF NOT loadStyles(m_formname) THEN
+		IF loadStyles("default") THEN
+		END IF
 	END IF
-	IF ad_name IS NOT NULL THEN
-		TRY
-			CALL ui.interface.loadActionDefaults(ad_name)
-		CATCH
-			DISPLAY m_dbgtxt, ":Actions '" || st_name || "' NOT loaded! "
-		END TRY
+	IF NOT loadActions(m_formname) THEN
+		IF loadActions("default") THEN
+		END IF
 	END IF
 END FUNCTION
 --------------------------------------------------------------------------------
@@ -397,28 +411,40 @@ FUNCTION sel_form()
 	DEFINE rec DYNAMIC ARRAY OF RECORD
 		col1 STRING
 	END RECORD
-	DEFINE x, ret SMALLINT
-	DEFINE cmd, line STRING
-	DEFINE fil_pip base.Channel
-	DEFINE tok base.StringTokenizer
+	DEFINE d SMALLINT
+	DEFINE l_path, l_ext STRING
 
-	LET cmd = "ls -1 *.42f"
+	CALL os.Path.dirSort("name", 1)
+	LET d = os.Path.dirOpen(".")
+	IF d > 0 THEN
+		WHILE TRUE
+			LET l_path = os.Path.dirNext(d)
+			IF l_path IS NULL THEN
+				EXIT WHILE
+			END IF
 
-	LET fil_pip = base.Channel.create()
-	CALL fil_pip.openpipe(cmd, "r")
-	LET ret = 1
-	WHILE ret = 1
-		LET ret = fil_pip.read(line)
-		IF ret = 1 THEN
-			LET tok = base.StringTokenizer.create(line, "/")
-			WHILE tok.hasMoreTokens()
-				LET line = tok.nextToken()
-			END WHILE
-			LET x = line.getIndexOf(".", 1)
-			LET rec[rec.getLength() + 1].col1 = line.subString(1, x - 1)
-		END IF
-	END WHILE
+			IF os.path.isDirectory(l_path) THEN
+				CONTINUE WHILE
+			ELSE
+				--DISPLAY "Fil:",path
+			END IF
 
+			LET l_ext = os.path.extension(l_path)
+			IF l_ext IS NULL OR l_ext != "42f" THEN
+				CONTINUE WHILE
+			END IF
+
+			LET rec[rec.getLength() + 1].col1 = os.path.rootName(l_path)
+		END WHILE
+	END IF
+
+	IF rec.getLength() = 0 THEN
+		CALL fgl_winMessage(
+				"Error", SFMT("No compiled forms found in %1", os.path.pwd()), "exclamation")
+		RETURN
+	END IF
+
+	CLOSE WINDOW SCREEN
 	OPEN WINDOW listwin AT 1, 1 WITH 1 ROWS, 1 COLUMNS
 	CALL mk_listwin(1, "Select Form", "Name", "", "")
 
@@ -430,11 +456,8 @@ FUNCTION sel_form()
 			LET m_autofill = TRUE
 			EXIT DISPLAY
 		ON ACTION ACCEPT
-			RUN "fglrun showForm " || rec[arr_curr()].col1
+			RUN "fglrun showForm.42r " || rec[arr_curr()].col1
 	END DISPLAY
-	IF int_flag THEN
-		EXIT PROGRAM
-	END IF
 
 	CLOSE WINDOW listwin
 
